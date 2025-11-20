@@ -32,13 +32,15 @@ download_latest_versioned_file() {
     local TMPDIR
     TMPDIR=$(mktemp -d)
 
-    local http_code HTML
+    local http_code HTML VERSION_HTML
+    local curl_out
 
     ###########################################################################
-    # 1. FETCH BASE URL
+    # 1. FETCH BASE URL (directory listing)
     ###########################################################################
-    HTML=$(curl -sS -w "%{http_code}" -o "$TMPDIR/index.html" "$BASE_URL")
-    http_code="$HTML"
+    curl_out=$(curl -sS -w "%{http_code}" "$BASE_URL")
+    http_code=$(echo "$curl_out" | tail -c 3)
+    HTML="${curl_out%${http_code}}"
 
     if [[ "$http_code" == "000" ]]; then
         log "ERROR" "NETWORK ERROR: Could not reach $BASE_URL (exit 10)"
@@ -50,9 +52,8 @@ download_latest_versioned_file() {
         return 11
     fi
 
-    HTML=$(cat "$TMPDIR/index.html")
     if [[ -z "$HTML" ]]; then
-        log "ERROR" "Empty response from $BASE_URL (exit 12)"
+        log "ERROR" "Empty directory listing at $BASE_URL (exit 12)"
         return 12
     fi
 
@@ -60,7 +61,7 @@ download_latest_versioned_file() {
     # 2. PARSE VERSION DIRECTORIES
     ###########################################################################
     local INDEX_LINES
-    INDEX_LINES=$(echo "$HTML" | grep -E '<a href="([0-9]+\.)+[0-9]+/">' )
+    INDEX_LINES=$(echo "$HTML" | grep -E '<a href="([0-9]+\.)+[0-9]+/">' || true)
 
     if [[ -z "$INDEX_LINES" ]]; then
         log "ERROR" "No version directories found at $BASE_URL (exit 20)"
@@ -77,7 +78,7 @@ download_latest_versioned_file() {
     done <<< "$INDEX_LINES"
 
     ###########################################################################
-    # 3. DETERMINE LATEST VERSION
+    # 3. PICK LATEST VERSION BY TIMESTAMP
     ###########################################################################
     local LATEST_VERSION=""
     local LATEST_TS_EPOCH=0
@@ -86,8 +87,8 @@ download_latest_versioned_file() {
     for item in "${VERSION_LIST[@]}"; do
         ver="${item%%|*}"
         ts="${item#*|}"
-        epoch=$(date -j -f "%d-%b-%Y %H:%M" "$ts" "+%s" 2>/dev/null || echo "")
 
+        epoch=$(date -j -f "%d-%b-%Y %H:%M" "$ts" "+%s" 2>/dev/null || echo "")
         [[ -z "$epoch" ]] && continue
 
         if (( epoch > LATEST_TS_EPOCH )); then
@@ -104,11 +105,11 @@ download_latest_versioned_file() {
     local LATEST_URL="${BASE_URL%/}/$LATEST_VERSION/"
 
     ###########################################################################
-    # 4. FETCH VERSION DIRECTORY
+    # 4. FETCH VERSION DIRECTORY LISTING
     ###########################################################################
-    local VERSION_HTML
-    VERSION_HTML=$(curl -sS -w "%{http_code}" -o "$TMPDIR/version.html" "$LATEST_URL")
-    http_code="$VERSION_HTML"
+    curl_out=$(curl -sS -w "%{http_code}" "$LATEST_URL")
+    http_code=$(echo "$curl_out" | tail -c 3)
+    VERSION_HTML="${curl_out%${http_code}}"
 
     if [[ "$http_code" == "000" ]]; then
         log "ERROR" "NETWORK ERROR: Could not reach $LATEST_URL (exit 10)"
@@ -120,13 +121,11 @@ download_latest_versioned_file() {
         return 30
     fi
 
-    VERSION_HTML=$(cat "$TMPDIR/version.html")
-
     ###########################################################################
-    # 5. LOCATE FILE MATCHING PREFIX
+    # 5. IDENTIFY FILE MATCHING PREFIX
     ###########################################################################
     local FILE_LINES fname FILE_URL
-    FILE_LINES=$(echo "$VERSION_HTML" | grep -E '<a href=')
+    FILE_LINES=$(echo "$VERSION_HTML" | grep -E '<a href=' || true)
 
     while IFS= read -r line; do
         fname=$(echo "$line" | sed -E 's/.*href="([^"]+)".*/\1/')
@@ -162,13 +161,13 @@ download_latest_versioned_file() {
     fi
 
     ###########################################################################
-    # 7. VERIFY DOWNLOADED FILE EXISTS
+    # 7. RETURN DOWNLOADED FILE PATH
     ###########################################################################
     local DOWNLOADED_FILE
     DOWNLOADED_FILE=$(find "$TMPDIR" -type f -maxdepth 1 | head -1)
 
     if [[ -z "$DOWNLOADED_FILE" ]]; then
-        log "ERROR" "File downloaded but missing in TMPDIR (exit 41)"
+        log "ERROR" "File downloaded but missing from disk (exit 41)"
         return 41
     fi
 
